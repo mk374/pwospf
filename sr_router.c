@@ -16,11 +16,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-
-#include "sr_if.h"
-#include "sr_rt.h"
-#include "sr_router.h"
-#include "sr_protocol.h"
 #include "sr_arpcache.h"
 #include "sr_utils.h"
 
@@ -44,10 +39,21 @@ void sr_init(struct sr_instance* sr)
     pthread_attr_setdetachstate(&(sr->attr), PTHREAD_CREATE_JOINABLE);
     pthread_attr_setscope(&(sr->attr), PTHREAD_SCOPE_SYSTEM);
     pthread_attr_setscope(&(sr->attr), PTHREAD_SCOPE_SYSTEM);
-    pthread_t thread;
+    pthread_t arp_thread;
 
-    pthread_create(&thread, &(sr->attr), sr_arpcache_timeout, sr);
+    pthread_create(&arp_thread, &(sr->attr), sr_arpcache_timeout, sr);
     
+    srand(time(NULL));
+    pthread_mutexattr_init(&(sr->rt_lock_attr));
+    pthread_mutexattr_settype(&(sr->rt_lock_attr), PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&(sr->rt_lock), &(sr->rt_lock_attr));
+
+    pthread_attr_init(&(sr->rt_attr));
+    pthread_attr_setdetachstate(&(sr->rt_attr), PTHREAD_CREATE_JOINABLE);
+    pthread_attr_setscope(&(sr->rt_attr), PTHREAD_SCOPE_SYSTEM);
+    pthread_attr_setscope(&(sr->rt_attr), PTHREAD_SCOPE_SYSTEM);
+    pthread_t rt_thread;
+    pthread_create(&rt_thread, &(sr->rt_attr), sr_rip_timeout, sr);
     /* Add initialization code here! */
 
 } /* -- sr_init -- */
@@ -277,36 +283,7 @@ struct sr_if* headed_to_interface(struct sr_instance * sr, uint32_t ip_destinati
   return 0;
 }
 
-void handle_arp_packet(struct sr_instance* sr, uint8_t * packet/* lent */,
-    unsigned int len, char* interface/* lent */) {
-  /*check length*/
-  if (sizeof(sr_arp_hdr_t) + sizeof(sr_ethernet_hdr_t) > len) {
-    printf("There was an error. The packet is too short.");
-    return;
-  }
 
-  sr_arp_hdr_t *arp_hdr =
-      (sr_arp_hdr_t *) (packet + sizeof(sr_ethernet_hdr_t));
-  sr_ethernet_hdr_t* ethernet_hdr = (sr_ethernet_hdr_t*) packet;
-  struct sr_if* rcvd_interface = sr_get_interface(sr, interface);
-
-  printf("ARP frame detected, processing...\n");
-
-  /*look at opcode*/
-  switch(ntohs(arp_hdr->ar_op)){
-    case arp_op_request:
-      printf("Handling ARP request...\n");
-      handle_arp_request(sr, ethernet_hdr, arp_hdr, rcvd_interface);
-      break;
-    case arp_op_reply:
-      printf("Handling ARP reply...\n");
-      handle_arp_reply(sr, arp_hdr, rcvd_interface);
-      break;
-    default:
-      printf("ARP frame not reply or request\n");
-      return;
-  }
-}
 
 void handle_arp_request(struct sr_instance* sr, sr_ethernet_hdr_t *eth_hdr, sr_arp_hdr_t *arp_hdr,
     struct sr_if* interface/* lent */){
@@ -366,6 +343,37 @@ void handle_arp_reply(struct sr_instance* sr, sr_arp_hdr_t *arp_hdr, struct sr_i
 
       sr_arpreq_destroy(&sr->cache, request);
     }
+  }
+}
+
+void handle_arp_packet(struct sr_instance* sr, uint8_t * packet/* lent */,
+    unsigned int len, char* interface/* lent */) {
+  /*check length*/
+  if (sizeof(sr_arp_hdr_t) + sizeof(sr_ethernet_hdr_t) > len) {
+    printf("There was an error. The packet is too short.");
+    return;
+  }
+
+  sr_arp_hdr_t *arp_hdr =
+      (sr_arp_hdr_t *) (packet + sizeof(sr_ethernet_hdr_t));
+  sr_ethernet_hdr_t* ethernet_hdr = (sr_ethernet_hdr_t*) packet;
+  struct sr_if* rcvd_interface = sr_get_interface(sr, interface);
+
+  printf("ARP frame detected, processing...\n");
+
+  /*look at opcode*/
+  switch(ntohs(arp_hdr->ar_op)){
+    case arp_op_request:
+      printf("Handling ARP request...\n");
+      handle_arp_request(sr, ethernet_hdr, arp_hdr, rcvd_interface);
+      break;
+    case arp_op_reply:
+      printf("Handling ARP reply...\n");
+      handle_arp_reply(sr, arp_hdr, rcvd_interface);
+      break;
+    default:
+      printf("ARP frame not reply or request\n");
+      return;
   }
 }
 
