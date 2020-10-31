@@ -18,6 +18,10 @@
 
 #include "sr_arpcache.h"
 #include "sr_utils.h"
+#include "sr_if.h"
+#include "sr_rt.h"
+#include "sr_router.h"
+#include "sr_protocol.h"
 
 /*---------------------------------------------------------------------
  * Method: sr_init(void)
@@ -138,7 +142,22 @@ void handle_ip_packet(struct sr_instance* sr,
         return;
       }
     }
-  } else { 
+  } else if (ip_header->ip_p == ip_protocol_udp) {
+      printf("UDP Packet received");
+      sr_rip_pkt_t* rip_packet = (sr_rip_pkt_t *) (packet + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t) + sizeof(sr_udp_hdr_t));
+      if (rip_packet->command == 1) { /*request */
+        printf("Request RIP Packet");
+        send_rip_update(sr);
+      } else if (rip_packet->command == 2) { /*response*/
+        printf("Response RIP Packet");
+        update_route_table(sr, ip_header, rip_packet, interface);
+      } /* else {
+        send_icmp_packet(sr, packet, interface, 3, 3);
+        return;
+      }  Don't know if necessary */
+
+    } else { 
+    
     if(ip_header->ip_ttl <= 1) {
       send_icmp_packet(sr, packet, interface, 11, 0);
       return;

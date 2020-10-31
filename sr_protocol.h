@@ -160,8 +160,6 @@ struct sr_icmp_t11_hdr {
 } __attribute__ ((packed)) ;
 typedef struct sr_icmp_t11_hdr sr_icmp_t11_hdr_t;
 
-
-
 /*
  * Structure of an internet header, naked of options.
  */

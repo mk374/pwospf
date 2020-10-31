@@ -31,7 +31,7 @@
 struct sr_rt
 {
     struct in_addr dest;
-    struct in_addr gw;
+    struct in_addr gw; /* gateway */
     struct in_addr mask;
     char   interface[sr_IFACE_NAMELEN];
     uint32_t metric;
