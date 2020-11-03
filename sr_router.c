@@ -135,12 +135,6 @@ void handle_ip_packet(struct sr_instance* sr,
       }
       curr = curr->next;
     }
-    /*
-    if ((curr_status == 0) || (down == 1)) {
-      send_icmp_packet(sr, packet, interface, 3, 0); 
-      return;
-    }
-    */
   }
 
   if (headed_to_rt_interface || inet_addr("255.255.255.255") == ip_header->ip_dst) { 
