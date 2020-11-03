@@ -27,19 +27,8 @@ void handle_arpreq(struct sr_instance* sr, struct sr_arpreq* request) {
             unsigned int len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t);
             uint8_t *packet_new = (uint8_t *)malloc(len);
             bzero(packet_new, len);
-
-            struct in_addr addr;
-            addr.s_addr = request->ip;
-            struct sr_rt* curr = sr_routing_table_prefix_match(sr, addr);
-
-            if(!curr) { 
-                printf("Host unreachable\n");
-                /*send_icmp_packet(sr, packet, interface, 3, 0);*/
-                return;
-            }
-
-            struct sr_if* new_interface = sr_get_interface(sr, curr->interface);
-
+            struct sr_if *new_interface = sr_get_interface(sr, request->packets->iface);
+            
             sr_ethernet_hdr_t *e_hdr = (sr_ethernet_hdr_t *) packet_new;
             memset(e_hdr->ether_dhost, 0xff, ETHER_ADDR_LEN);
             memcpy(e_hdr->ether_shost, new_interface->addr, ETHER_ADDR_LEN);
@@ -56,7 +45,7 @@ void handle_arpreq(struct sr_instance* sr, struct sr_arpreq* request) {
             memset(arp_hdr->ar_tha, 0xff, ETHER_ADDR_LEN);
             arp_hdr->ar_tip = request->ip;
 
-            sr_send_packet(sr, packet_new, len, curr->interface);
+            sr_send_packet(sr, packet_new, len, new_interface->name);
 
             request->sent = time(NULL);
             request->times_sent += 1;    
@@ -76,7 +65,6 @@ void sr_arpcache_sweepreqs(struct sr_instance *sr) {
            handle_arpreq(request) */
     struct sr_arpreq* req = sr->cache.requests;
     while(req) {
-        /* save next pointer first */
         struct sr_arpreq* next_req = req->next;
         handle_arpreq(sr, req);
         req = next_req;

@@ -111,6 +111,7 @@ void handle_ip_packet(struct sr_instance* sr,
   }
   sr_ip_hdr_t *ip_header = (sr_ip_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
   sr_ethernet_hdr_t* e_hdr = (sr_ethernet_hdr_t*)packet;
+  sr_icmp_t3_hdr_t *icmp_hdr = (sr_icmp_t3_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
 
   ip_header->ip_sum = 0;
   if(!cksum(ip_header, ip_header->ip_hl)) {
@@ -119,17 +120,51 @@ void handle_ip_packet(struct sr_instance* sr,
   }
 
   struct sr_if *headed_to_rt_interface = headed_to_interface(sr, ip_header->ip_dst);
-  sr_icmp_hdr_t *icmp_hdr = (sr_icmp_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t));
 
+  if (headed_to_rt_interface) {
+    uint32_t curr_status = sr_obtain_interface_status(sr, headed_to_rt_interface->name);
+    if (curr_status == 0) {
+      send_icmp_packet(sr, packet, interface, 3, 0); 
+      return;
+    }
+    struct sr_if *curr = sr->if_list;
+    while (curr) {
+      if (((curr->ip & curr->mask) == (ip_header->ip_dst & curr->mask)) && (curr->status == 0)) {
+        send_icmp_packet(sr, packet, interface, 3, 0); 
+        return;
+      }
+      curr = curr->next;
+    }
+    /*
+    if ((curr_status == 0) || (down == 1)) {
+      send_icmp_packet(sr, packet, interface, 3, 0); 
+      return;
+    }
+    */
+  }
 
-  if (headed_to_rt_interface) { 
+  if (headed_to_rt_interface || inet_addr("255.255.255.255") == ip_header->ip_dst) { 
     printf("The IP packet is for us\n");
-    if (ip_header->ip_p != ip_protocol_icmp) {
-      printf("Not ICMP protocol");
+    if (ip_header->ip_p == ip_protocol_udp) {
+      printf("UDP Packet received\n");
+      sr_rip_pkt_t* rip_packet = (sr_rip_pkt_t *) (packet + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t) + sizeof(sr_udp_hdr_t));
+      if (rip_packet->command == 1) { /*request */
+        printf("Request RIP Packet\n");
+        send_rip_update(sr);
+      } else if (rip_packet->command == 2) { /*response*/
+        printf("Response RIP Packet\n");
+        update_route_table(sr, ip_header, rip_packet, interface);
+      }  else {
+        send_icmp_packet(sr, packet, interface, 3, 3);
+        return;
+      }
+    } else if (ip_header->ip_p != ip_protocol_icmp) {
+      printf("Not ICMP protocol\n");
       uint8_t icmp_type = 3;
       uint8_t icmp_code = 3;
       send_icmp_packet(sr, packet, interface, icmp_type, icmp_code); /* port unreachable */
       return;
+
     } else {
       if (icmp_hdr->icmp_type == 8 && icmp_hdr->icmp_code == 0) {
         printf("Receive an ICMP Echo request\n");
@@ -142,21 +177,7 @@ void handle_ip_packet(struct sr_instance* sr,
         return;
       }
     }
-  } else if (ip_header->ip_p == ip_protocol_udp) {
-      printf("UDP Packet received");
-      sr_rip_pkt_t* rip_packet = (sr_rip_pkt_t *) (packet + sizeof(sr_ip_hdr_t) + sizeof(sr_ethernet_hdr_t) + sizeof(sr_udp_hdr_t));
-      if (rip_packet->command == 1) { /*request */
-        printf("Request RIP Packet");
-        send_rip_update(sr);
-      } else if (rip_packet->command == 2) { /*response*/
-        printf("Response RIP Packet");
-        update_route_table(sr, ip_header, rip_packet, interface);
-      } /* else {
-        send_icmp_packet(sr, packet, interface, 3, 3);
-        return;
-      }  Don't know if necessary */
-
-    } else { 
+  } else { 
     
     if(ip_header->ip_ttl <= 1) {
       send_icmp_packet(sr, packet, interface, 11, 0);
@@ -164,7 +185,9 @@ void handle_ip_packet(struct sr_instance* sr,
     }
     struct in_addr addr;
     addr.s_addr = ip_header->ip_dst;
+    pthread_mutex_lock(&(sr->rt_lock));
     struct sr_rt * curr = sr_routing_table_prefix_match(sr, addr);
+    pthread_mutex_unlock(&(sr->rt_lock));
 
     if(!curr) { /* if there is no match in the routing table */
       printf("Host unreachable\n");
@@ -175,17 +198,29 @@ void handle_ip_packet(struct sr_instance* sr,
     struct sr_if *new_interface = sr_get_interface(sr, curr->interface);
     memcpy(e_hdr->ether_shost, new_interface->addr, ETHER_ADDR_LEN);
 
-    struct sr_arpentry *arp_e = sr_arpcache_lookup(&(sr->cache), curr->gw.s_addr);
-    if (arp_e) {
-      memcpy(e_hdr->ether_dhost, arp_e->mac, ETHER_ADDR_LEN);
+    struct sr_arpentry *arp_entry;
+    if (curr->gw.s_addr == 0) {
+      arp_entry = sr_arpcache_lookup(&(sr->cache), ip_header->ip_dst);
+    } else {
+      arp_entry = sr_arpcache_lookup(&(sr->cache), curr->gw.s_addr);
+    }
+
+    if (arp_entry) {
+      memcpy(e_hdr->ether_dhost, arp_entry->mac, ETHER_ADDR_LEN);
       ip_header->ip_ttl -= 1;
       ip_header->ip_sum = 0;
       ip_header->ip_sum = cksum(ip_header, sizeof(sr_ip_hdr_t));
       sr_send_packet(sr, packet, len, curr->interface);
-      free(arp_e);
+      free(arp_entry);
       return;
     } else {
-      handle_arpreq(sr, sr_arpcache_queuereq(&(sr->cache), curr->gw.s_addr, packet, len, interface));
+      struct sr_arpreq *queued_arp_req;
+      if (curr->gw.s_addr == 0) {
+        queued_arp_req = sr_arpcache_queuereq(&(sr->cache),ip_header->ip_dst, packet, len, curr->interface);
+      } else {
+        queued_arp_req = sr_arpcache_queuereq(&(sr->cache), curr->gw.s_addr, packet, len, curr->interface);
+      }
+      handle_arpreq(sr, queued_arp_req);
       return;
     }
   }
@@ -277,10 +312,12 @@ struct sr_rt* sr_routing_table_prefix_match(struct sr_instance* sr, struct in_ad
   unsigned long longest_len = 0;
 
   while(cur) {
-    if((cur->dest.s_addr & cur->mask.s_addr) == (addr.s_addr & cur->mask.s_addr)){
-      if(longest_len < cur->mask.s_addr){
-        longest_len = cur->mask.s_addr;
-        longest_entry = cur;
+    if (cur->metric < INFINITY) {
+      if((cur->dest.s_addr & cur->mask.s_addr) == (addr.s_addr & cur->mask.s_addr)){
+        if(longest_len < cur->mask.s_addr){
+          longest_len = cur->mask.s_addr;
+          longest_entry = cur;
+        }
       }
     }
     cur=cur->next;
@@ -301,8 +338,6 @@ struct sr_if* headed_to_interface(struct sr_instance * sr, uint32_t ip_destinati
   }
   return 0;
 }
-
-
 
 void handle_arp_request(struct sr_instance* sr, sr_ethernet_hdr_t *eth_hdr, sr_arp_hdr_t *arp_hdr,
     struct sr_if* interface/* lent */){
