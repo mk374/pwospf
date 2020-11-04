@@ -179,10 +179,9 @@ void handle_ip_packet(struct sr_instance* sr,
     }
     struct in_addr addr;
     addr.s_addr = ip_header->ip_dst;
-    pthread_mutex_lock(&(sr->rt_lock));
+    
     struct sr_rt * curr = sr_routing_table_prefix_match(sr, addr);
-    pthread_mutex_unlock(&(sr->rt_lock));
-
+    
     if(!curr) { /* if there is no match in the routing table */
       printf("Host unreachable\n");
       send_icmp_packet(sr, packet, interface, 3, 0);
