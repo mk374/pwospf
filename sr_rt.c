@@ -404,20 +404,6 @@ void send_rip_update(struct sr_instance *sr){
     pthread_mutex_unlock(&(sr->rt_lock));
 }
 
-int check_interface(struct sr_instance *sr, struct entry *entry){
-    struct sr_if *interface = sr->if_list;
-
-    while(interface) {
-        if((interface->ip & interface->mask) == (entry->address & entry->mask)){
-            return 1;
-        }
-
-        interface = interface->next;
-    }
-
-    return 0;
-}
-
 void update_route_table(struct sr_instance *sr, sr_ip_hdr_t* ip_packet,
         sr_rip_pkt_t* rip_packet, char* iface) {
     pthread_mutex_lock(&(sr->rt_lock));
@@ -426,9 +412,21 @@ void update_route_table(struct sr_instance *sr, sr_ip_hdr_t* ip_packet,
     int i = 0;
     while(i < MAX_NUM_ENTRIES){
         struct entry *entry = &rip_packet->entries[i];
+
+        bool valid_interface = false;
+        struct sr_if *interface = sr->if_list;
+
+        while(interface) {
+            if((interface->ip & interface->mask) == (entry->address & entry->mask)){
+                valid_interface = true;
+            }
+
+            interface = interface->next;
+        }
+
             
 
-        if(entry->address != 0 && entry->address != 127 && (check_interface(sr,entry) == 0)){
+        if(entry->address != 0 && entry->address != 127 && valid_interface){
             int m = ntohl(entry->metric);
             if(m+1 > INFINITY){
                 entry->metric = htonl(INFINITY);
